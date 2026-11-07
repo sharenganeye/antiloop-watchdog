@@ -28,8 +28,8 @@ Performance and hardening pass, driven by a measured slowdown report.
   deadline (1.51 s).
 - `docs/PERFORMANCE.md` — per-event and per-turn costs with the measurement method, plus two
   confounders: the desktop UI costs the *model* ~13 % throughput (49.1 vs 55.5 tok/s), and the
-  hooks themselves show no detectable turn-level cost (10 interleaved pairs, +0.49 s, 95 % CI
-  [−0.76, +1.75]).
+  hooks themselves show no detectable turn-level cost (10 interleaved pairs, +0.49 s,
+  95 % t-interval [−1.03, +2.02]).
 - The integration harness is now policy-aware: it reads `/config` and asserts the interrupt behaviour
   that the policy actually enables.
 

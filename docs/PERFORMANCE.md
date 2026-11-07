@@ -142,12 +142,22 @@ profile so no session lease interfered:
 ```
 hooks     23.0 22.3 24.9 21.9 22.7 20.3 20.8 21.6 18.5 22.7
 no hooks  20.7 20.3 20.7 21.9 22.3 23.9 21.7 20.3 19.2 22.7
-paired difference: mean +0.49 s, 95% CI [-0.76, +1.75]
+paired difference: mean +0.49 s, 95% t-interval [-1.03, +2.02]
 ```
 
-Verdict: **no detectable difference** at this sample size — which is the honest form of the claim.
-With four events at 55–60 ms the expected cost is ~0.25 s per turn, and the interval is consistent
-with that; it is simply smaller than the ±1.3 s turn-to-turn spread.
+Verdict: **no detectable difference** at this sample size — which is the honest form of the claim,
+and the upper bound is the part that matters. With n=10 the correct interval is a t-interval
+(t = 2.262, df = 9), not the normal approximation:
+
+```
+mean +0.49 s | sample sd 2.14 | se 0.68
+t-interval 95%: [-1.03, +2.02]
+```
+
+So the data rules out a cost larger than about **2.0 s per turn (9.6 % of a 21 s turn)** and
+nothing smaller. The expected cost of four events at 55–60 ms is ~0.25 s, which sits comfortably
+inside that interval, but 10 pairs cannot separate it from noise. Tightening the half-width to
+±0.5 s at this variance would need roughly **94 pairs**, which is not worth the machine time.
 
 A first attempt at this A/B produced 2.4 s "turns" for both arms: every run was rejected by Hermes'
 session lease (`active session limit 1/1`, held by the desktop session). Those numbers were
