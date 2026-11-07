@@ -1,0 +1,25 @@
+# runtime state and logs (never commit)
+state/
+logs/
+antiloop-stream/
+*.pid
+*.jsonl
+
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+pytest_*.txt
+
+# integration runtime
+integration/state/
+integration/.watchdog_down
+integration/*.bak
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

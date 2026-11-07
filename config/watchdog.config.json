@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "default_mode": "observe",
+  "require_session_id": false,
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8791,
+    "token_file": "state/token",
+    "max_body_bytes": 1048576,
+    "max_batch_events": 100
+  },
+  "paths": {
+    "log_dir": "logs",
+    "state_dir": "state"
+  },
+  "speed": {
+    "enabled": true,
+    "warning_tps": 70.0,
+    "critical_tps": 80.0,
+    "min_block_tokens": 5,
+    "min_block_duration_s": 1.0,
+    "window_s": 60.0,
+    "min_window_duration_s": 5.0,
+    "min_window_tokens": 64,
+    "min_window_blocks": 3,
+    "prefill_floor_tps": 400.0,
+    "baseline": {
+      "thinking": [
+        40,
+        55
+      ],
+      "answering": [
+        34,
+        50
+      ],
+      "tool_call": [
+        50,
+        71
+      ],
+      "decode": [
+        48,
+        49
+      ]
+    }
+  },
+  "repetition": {
+    "enabled": true,
+    "window_tokens": 512,
+    "min_sequence_tokens": 64,
+    "threshold": 3,
+    "check_interval_tokens": 16,
+    "code_threshold_multiplier": 3,
+    "structured_punct_ratio": 0.45,
+    "ignore_kinds": [
+      "tool_output",
+      "file_content"
+    ],
+    "sentence_repeat_threshold": 3,
+    "sentence_min_words": 8,
+    "ignore_patterns": []
+  },
+  "tool_loop": {
+    "enabled": true,
+    "history": 64,
+    "failed_repeat_threshold": 3,
+    "identical_cycle_threshold": 4,
+    "read_repeat_threshold": 4,
+    "edit_repeat_threshold": 3,
+    "search_repeat_threshold": 3,
+    "cycle_max_period": 4,
+    "cycle_repeats": 3,
+    "poll_threshold_multiplier": 3,
+    "volatile_arg_keys": [
+      "timestamp",
+      "ts",
+      "time",
+      "request_id",
+      "id",
+      "call_id",
+      "tool_call_id",
+      "nonce",
+      "session_id",
+      "trace_id",
+      "uuid"
+    ],
+    "exempt_tools": [],
+    "poll_tools": [
+      "^(sleep|wait|poll|process_poll|check_status|get_status|process_status)$"
+    ],
+    "tool_categories": {
+      "write": [
+        "(write|edit|patch|replace|create_file|append|apply|save|modify|delete|remove|move|rename)"
+      ],
+      "search": [
+        "(search|grep|find|query|lookup|glob)"
+      ],
+      "read": [
+        "(^|[_.\\-])(read|cat|view|open|get_file|head|tail|list_dir|ls|stat)([_.\\-]|$)"
+      ],
+      "exec": [
+        "(terminal|bash|shell|exec|run|cmd|powershell|command|python)"
+      ]
+    }
+  },
+  "progress": {
+    "enabled": true,
+    "window_calls": 24,
+    "min_calls": 8,
+    "novelty_floor": 0.35,
+    "error_streak_start": 3,
+    "no_change_calls": 15,
+    "alert_score": 0.6,
+    "weights": {
+      "novelty": 0.35,
+      "errors": 0.25,
+      "duplicate_results": 0.2,
+      "no_state_change": 0.2
+    }
+  },
+  "intervention": {
+    "log_threshold": 0.5,
+    "alert_threshold": 0.6,
+    "auto_threshold": 0.85,
+    "detection_ttl_s": 120.0,
+    "realert_step": 2,
+    "realert_min_interval_s": 5.0,
+    "cooldown_s": 30.0,
+    "failure_retry_s": 15.0,
+    "escalate_after_redirects": 2,
+    "escalation_grace_s": 10.0,
+    "allow_interrupt": true,
+    "recovery_quiet_s": 60.0,
+    "recovery_min_events": 10,
+    "directive_ttl_s": 600.0,
+    "message": "You appear to be stuck in a repetitive loop. Stop repeating previous reasoning and actions. Review what has already been completed, identify the blocker, preserve completed work, and select a different concrete approach. Do not restart the same failed sequence.",
+    "interrupt_message": "Watchdog requests that this session's current generation/turn be interrupted because it is stuck in a repetitive loop that did not respond to redirection."
+  },
+  "adapter": {
+    "type": "queue",
+    "redirect_url": "",
+    "interrupt_url": "",
+    "timeout_s": 3.0,
+    "auth_env": ""
+  },
+  "sessions": {
+    "max_sessions": 64,
+    "idle_ttl_s": 3600.0,
+    "max_events": 2000
+  },
+  "logging": {
+    "json_file": "watchdog.jsonl",
+    "text_file": "watchdog.log",
+    "max_bytes": 5242880,
+    "backups": 3,
+    "capture_text": false,
+    "capture_chars": 200
+  },
+  "collector": {
+    "llama_log_path": "",
+    "llama_log_from_start": false,
+    "poll_interval_s": 1.0
+  }
+}

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support Antiloop</title>
+<meta name="description" content="Optional support for Antiloop, the anti-loop watchdog for local LLM agents.">
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --fg:#e8eaf0; --muted:#9aa3b2; --accent:#57d1a3; --border:#262b36; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 720px; margin:0 auto; padding:64px 24px 80px; }
+  h1 { font-size:2rem; margin:0 0 6px; letter-spacing:-0.02em; }
+  h2 { font-size:1.05rem; margin:36px 0 10px; color:var(--muted); font-weight:600;
+       text-transform:uppercase; letter-spacing:.08em; }
+  p { margin:0 0 14px; }
+  a { color: var(--accent); }
+  .back { display:inline-block; margin-bottom:28px; color:var(--muted); text-decoration:none; font-size:.92rem; }
+  .lead { color:var(--muted); font-size:1.05rem; }
+  .options { display:grid; gap:12px; margin:22px 0 8px; }
+  .opt { display:flex; align-items:center; justify-content:space-between; gap:16px;
+         background:var(--card); border:1px solid var(--border); border-radius:12px;
+         padding:16px 18px; text-decoration:none; color:var(--fg); transition:border-color .15s; }
+  .opt:hover { border-color:var(--accent); }
+  .opt .t { font-weight:600; }
+  .opt .s { color:var(--muted); font-size:.9rem; }
+  .arrow { color:var(--accent); font-size:1.15rem; }
+  .note { background:#141a18; border:1px solid #24463a; border-radius:12px; padding:16px 18px;
+          color:var(--muted); font-size:.94rem; }
+  footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--border);
+           color:var(--muted); font-size:.88rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="./">&larr; Back to Antiloop</a>
+
+  <h1>Support the project</h1>
+  <p class="lead">Antiloop is free, MIT-licensed, and stays that way. If it saves you time and you
+  would like to give something back, the options below are here for that — nothing is expected of
+  you, and nothing is locked behind a payment.</p>
+
+  <h2>Ways to help</h2>
+  <div class="options" id="options"></div>
+
+  <div class="note">
+    Donations are optional and never change what you get: same code, same licence, same support.
+    They simply keep the project moving. If you would rather contribute in another way, a bug
+    report or a false positive you hit is just as valuable.
+  </div>
+
+  <footer>
+    MIT licensed · <a href="https://github.com/sharenganeye/antiloop-watchdog">source on GitHub</a>
+  </footer>
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   Payment links — fill in what you use, leave the rest empty.
+   Nothing here is required; an empty entry is simply not shown.
+
+   paypal : https://www.paypal.com/donate/?hosted_button_id=...   (PayPal, card, Google Pay*)
+   stripe : https://buy.stripe.com/...                            (card, Apple Pay, Google Pay)
+   kofi   : https://ko-fi.com/...                                 (card, PayPal)
+   bmc    : https://www.buymeacoffee.com/...                      (card, PayPal)
+   sponsor: https://github.com/sponsors/<user>                    (GitHub, monthly or one-off)
+   (* provider-dependent)
+--------------------------------------------------------------------------- */
+const LINKS = {
+  stripe:  "",
+  paypal:  "",
+  kofi:    "",
+  sponsor: ""
+};
+
+const PROVIDERS = {
+  stripe:  { t: "Card, Apple Pay, Google Pay", s: "Secure checkout by Stripe" },
+  paypal:  { t: "PayPal", s: "PayPal balance or a card" },
+  kofi:    { t: "Ko-fi", s: "One-off or monthly" },
+  bmc:     { t: "Buy Me a Coffee", s: "One-off" },
+  sponsor: { t: "GitHub Sponsors", s: "Monthly or one-off" }
+};
+
+const box = document.getElementById('options');
+const active = Object.entries(LINKS).filter(([k, v]) => v && v.trim());
+
+if (active.length === 0) {
+  box.innerHTML = '<a class="opt" href="https://github.com/sharenganeye/antiloop-watchdog/issues">' +
+    '<span><span class="t">Support options are being set up</span><br>' +
+    '<span class="s">In the meantime, an issue with a real loop you hit helps the most</span></span>' +
+    '<span class="arrow">&rarr;</span></a>';
+} else {
+  for (const [key, url] of active) {
+    const p = PROVIDERS[key] || { t: key, s: "" };
+    const a = document.createElement('a');
+    a.className = 'opt';
+    a.href = url;
+    a.rel = 'noopener';
+    a.innerHTML = '<span><span class="t">' + p.t + '</span><br><span class="s">' + p.s +
+                  '</span></span><span class="arrow">&rarr;</span>';
+    box.appendChild(a);
+  }
+}
+</script>
+</body>
+</html>

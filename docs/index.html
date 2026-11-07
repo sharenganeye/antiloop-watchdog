@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Antiloop — anti-loop watchdog for local LLM agents</title>
+<meta name="description" content="Detect and break tool loops and text-repetition loops in local LLM agents (Hermes + llama.cpp/Strata). Standard library only, loopback, fail-open.">
+<style>
+  :root { --bg:#0f1115; --card:#171a21; --fg:#e8eaf0; --muted:#9aa3b2; --accent:#57d1a3; --border:#262b36; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 56px 24px 80px; }
+  h1 { font-size: 2.3rem; margin: 0 0 8px; letter-spacing:-0.02em; }
+  h2 { font-size: 1.25rem; margin: 44px 0 12px; }
+  p.lead { color: var(--muted); font-size: 1.1rem; margin-top:0; }
+  a { color: var(--accent); }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  pre { background: var(--card); border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+        overflow-x:auto; font-size: .88rem; }
+  code { background: var(--card); padding:2px 6px; border-radius:5px; font-size:.9em; }
+  pre code { background:none; padding:0; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:.94rem; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color: var(--muted); font-weight:600; }
+  .cards { display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin:18px 0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .card h3 { margin:0 0 6px; font-size:1rem; }
+  .card p { margin:0; color:var(--muted); font-size:.92rem; }
+  .donate { background: linear-gradient(180deg,#17251f,#141a18); border:1px solid #24463a;
+            border-radius:14px; padding:22px 24px; margin-top:16px; }
+  .donate code { font-size:1.02rem; letter-spacing:.03em; }
+  .muted { color: var(--muted); }
+  .btn { display:inline-block; background:var(--accent); color:#08130f; font-weight:650;
+         padding:11px 18px; border-radius:9px; text-decoration:none; margin-right:10px; }
+  footer { margin-top:56px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Antiloop</h1>
+  <p class="lead">An anti-loop watchdog for local LLM agents — catches the tool loop and the
+  repeating-word loop, without an API key, a GPU, or a single third-party package.</p>
+
+  <p>
+    <a class="btn" href="https://github.com/sharenganeye/antiloop-watchdog">View on GitHub</a>
+    <a class="btn" style="background:#2b3140;color:#e8eaf0" href="https://github.com/sharenganeye/antiloop-watchdog/blob/main/INTEGRATION_MANUAL.md">Integration manual</a>
+  </p>
+
+  <h2>Two failures, two answers</h2>
+  <div class="cards">
+    <div class="card">
+      <h3>Tool loops</h3>
+      <p>The agent runs the same failing command, re-reads the same file, repeats the same edit.
+      The watchdog detects it, refuses that one call, and hands the model a recovery protocol.</p>
+    </div>
+    <div class="card">
+      <h3>Text loops</h3>
+      <p>The model repeats one word or sentence until the budget ends. A streaming detector fires
+      about a second in, and a final-output transform keeps the loop out of your transcript.</p>
+    </div>
+    <div class="card">
+      <h3>Prevention first</h3>
+      <p>Greedy decoding on a low-bit quantisation is the real cause. With a repetition penalty the
+      same pathological prompt stops itself after 37 repeats instead of 220.</p>
+    </div>
+  </div>
+
+  <h2>What it does not do</h2>
+  <p>It cannot cancel a model request in flight — hooks may refuse a tool call, not interrupt a
+  generation. It does not call an LLM, does not phone home, cannot stop a process, and every
+  Hermes-side hook fails open: if the watchdog dies, your agent keeps working.</p>
+
+  <h2>Install</h2>
+<pre><code>git clone https://github.com/sharenganeye/antiloop-watchdog.git
+cd antiloop-watchdog
+scripts/start_watchdog.sh        # Windows: .\scripts\start_watchdog.ps1
+curl -s http://127.0.0.1:8791/health</code></pre>
+  <p class="muted">Python 3.9+, standard library only. Then follow the
+  <a href="https://github.com/sharenganeye/antiloop-watchdog/blob/main/INTEGRATION_MANUAL.md">integration manual</a>
+  to wire it into Hermes profiles (hooks, consent, plugin, canary, rollback).</p>
+
+  <h2>Measured</h2>
+  <table>
+    <tr><th>Item</th><th>Value</th></tr>
+    <tr><td>Service overhead</td><td>~34 MB RSS, 0.3 % of one core at normal agent load</td></tr>
+    <tr><td>Burst handling</td><td>~500 events/s at 12.7 % of one core</td></tr>
+    <tr><td>Hook cost per event</td><td>~100 ms including interpreter start-up</td></tr>
+    <tr><td>Tests</td><td>98 + 26 + 35 checks across service, plugin and bridge</td></tr>
+    <tr><td>Dependencies</td><td>none at runtime</td></tr>
+  </table>
+
+  <h2>Support</h2>
+  <p>It is free and MIT-licensed, and it stays that way. If it earns its place in your setup and you
+  would like to support its development, there is an optional support page — nothing is gated
+  behind it, and there is no expectation to.</p>
+  <p><a class="btn" href="./donate.html">Support the project</a>
+     <a class="btn" style="background:#2b3140;color:#e8eaf0" href="https://github.com/sharenganeye/antiloop-watchdog/issues">Report a loop or a false positive</a></p>
+
+  <footer>
+    MIT licensed · built for Hermes Agent with llama.cpp / Strata · not affiliated with Nous Research
+  </footer>
+</div>
+</body>
+</html>

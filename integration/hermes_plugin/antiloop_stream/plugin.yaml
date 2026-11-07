@@ -1,0 +1,9 @@
+name: antiloop-stream
+version: 1.0.0
+description: "Streaming text-loop detector and final-output protection (Antiloop layers A+B). Detects repeated phrases/sentences per session+turn, records them, forwards to the watchdog, and truncates a looped final answer. Never cancels or interrupts."
+author: "KlinikRadar lead"
+provides_hooks:
+  - on_stream_start
+  - on_stream_delta
+  - on_stream_end
+  - transform_llm_output
