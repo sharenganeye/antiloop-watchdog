@@ -1,6 +1,6 @@
 [project]
 name = "antiloop-watchdog"
-version = "1.0.0"
+version = "1.0.1"
 description = "Independent anti-loop watchdog for local LLM agent sessions (Hermes + llama.cpp/Strata)"
 requires-python = ">=3.9"
 dependencies = []          # runtime is standard library only

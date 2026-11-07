@@ -15,7 +15,7 @@ from typing import Any, Optional
 from .schema import MODES, ConfigError, ValidationError
 from .util import atomic_write_text
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 DEFAULT_MESSAGE = (
     "You appear to be stuck in a repetitive loop. Stop repeating previous reasoning and actions. "

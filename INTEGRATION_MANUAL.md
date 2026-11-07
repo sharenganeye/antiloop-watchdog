@@ -39,7 +39,7 @@ cd ANTILOOP && ./scripts/start_watchdog.sh    # POSIX
 
 ```bash
 curl -s http://127.0.0.1:8791/health
-# {"status":"ok","service":"antiloop-watchdog","version":"1.0.0","uptime_s":3.2}
+# {"status":"ok","service":"antiloop-watchdog","version":"1.0.1","uptime_s":3.2}
 ```
 
 First start creates `state/token` (mode 0600) and `state/watchdog.pid`.

@@ -45,7 +45,7 @@ import sys; sys.path.insert(0, r"<project dir>")            # or run Hermes tool
 from antiloop_watchdog.client import WatchdogClient, WatchdogUnavailable
 
 wd = WatchdogClient.from_files(r"<project dir>/state")      # reads state/token; base_url defaults to 127.0.0.1:8791
-print(wd.health())          # {'status': 'ok', 'service': 'antiloop-watchdog', 'version': '1.0.0', 'uptime_s': 3.2}
+print(wd.health())          # {'status': 'ok', 'service': 'antiloop-watchdog', 'version': '1.0.1', 'uptime_s': 3.2}
 ```
 
 curl:
@@ -60,7 +60,7 @@ the watchdog is a safety net, never a dependency. Default client timeout is 2 s;
 
 ## 3. Health checks
 
-* `GET /health` (no token): `{"status":"ok","service":"antiloop-watchdog","version":"1.0.0","uptime_s":12.3}`.
+* `GET /health` (no token): `{"status":"ok","service":"antiloop-watchdog","version":"1.0.1","uptime_s":12.3}`.
 * `GET /status` (token): version, uptime, default mode, adapter info, session counts per mode, counters, last detection,
   process RSS/CPU, config warnings. `adapter.verified_against_hermes` is always `false` until you change the code
   after verifying a real Hermes adapter.

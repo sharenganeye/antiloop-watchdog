@@ -70,4 +70,5 @@ def test_check_config_and_version_flags(tmp_path):
                         "--check-config"], cwd=str(ROOT), capture_output=True, text=True)
     assert r.returncode == 2 and "configuration error" in r.stderr
     r = subprocess.run([sys.executable, "-m", "antiloop_watchdog", "--version"], cwd=str(ROOT), capture_output=True, text=True)
-    assert r.returncode == 0 and r.stdout.strip() == "1.0.0"
+    from antiloop_watchdog.config import VERSION as PKG_VERSION
+    assert r.returncode == 0 and r.stdout.strip() == PKG_VERSION
