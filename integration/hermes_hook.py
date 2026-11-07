@@ -28,9 +28,7 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import socket
 from pathlib import Path
 
 BASE_URL = os.environ.get("WATCHDOG_URL", "http://127.0.0.1:8791")
@@ -176,25 +174,79 @@ def _session_id(raw) -> str:
     return "h-" + hashlib.sha1(sid.encode("utf-8", "replace")).hexdigest()[:20]
 
 
+def _quote(value: str) -> str:
+    safe = ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    return "".join(ch if ch in safe else "%%%02X" % ord(ch) for ch in str(value))
+
+
+def _endpoint():
+    rest = BASE_URL.split("://", 1)[-1]
+    hostport = rest.split("/", 1)[0]
+    host, _, port = hostport.partition(":")
+    return host or "127.0.0.1", int(port or 80)
+
+
 def _call(method: str, path: str, body=None):
+    """Raw HTTP/1.1 over a socket: ~2 ms instead of ~55 ms of import cost per event."""
     token = _token()
     if not token or _breaker_open():
         return None
-    data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(BASE_URL + path, data=data, method=method)
-    req.add_header("Authorization", "Bearer " + token)
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
+    data = b"" if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    host, port = _endpoint()
+    head = (method + " " + path + " HTTP/1.1\r\nHost: " + host + ":" + str(port) +
+            "\r\nAuthorization: Bearer " + token + "\r\nConnection: close\r\n")
+    if body is not None:
+        head += "Content-Type: application/json\r\n"
+    head += "Content-Length: " + str(len(data)) + "\r\n\r\n"
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
-            raw = resp.read()
-        _breaker_reset()
-        return json.loads(raw.decode("utf-8")) if raw else {}
-    except urllib.error.HTTPError:
-        return None          # service is up, it just refused this request: not a transport failure
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        sock = socket.create_connection((host, port), timeout=TIMEOUT_S)
+    except OSError:
         _breaker_trip()
         return None
+    try:
+        sock.sendall(head.encode("latin-1") + data)
+        chunks = []
+        while True:
+            part = sock.recv(65536)
+            if not part:
+                break
+            chunks.append(part)
+        raw = b"".join(chunks)
+    except OSError:
+        _breaker_trip()
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    if not raw:
+        _breaker_trip()
+        return None
+    head_bytes, _, payload = raw.partition(b"\r\n\r\n")
+    status_line = head_bytes.split(b"\r\n", 1)[0]
+    parts = status_line.split(b" ")
+    code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    if code >= 400:
+        return None                       # service is up, it refused this: not a transport failure
+    if b"chunked" in head_bytes.lower():
+        out, rest = [], payload
+        while True:
+            size_line, _, rest = rest.partition(b"\r\n")
+            try:
+                size = int(size_line.split(b";")[0], 16)
+            except ValueError:
+                break
+            if size == 0:
+                break
+            out.append(rest[:size])
+            rest = rest[size + 2:]
+        payload = b"".join(out)
+    try:
+        _breaker_reset()
+        return json.loads(payload.decode("utf-8")) if payload else {}
+    except (ValueError, UnicodeDecodeError):
+        return {}
 
 
 def _as_text(value, limit: int) -> str:
@@ -282,7 +334,7 @@ def _looks_failed(text: str) -> bool:
 
 def _directive_context(sid: str) -> str:
     """Pull queued directives for this session only; return the text to inject."""
-    data = _call("GET", "/sessions/" + urllib.parse.quote(sid, safe="") + "/directives")
+    data = _call("GET", "/sessions/" + _quote(sid) + "/directives")
     if not isinstance(data, dict):
         return ""
     directives = data.get("directives") or []
@@ -299,7 +351,7 @@ def _directive_context(sid: str) -> str:
         did = d.get("id")
         if did:
             _call("POST", "/sessions/%s/directives/%s/ack" % (
-                urllib.parse.quote(sid, safe=""), urllib.parse.quote(str(did), safe="")),
+                _quote(sid), _quote(str(did))),
                 {"result": "applied"})
     if not messages:
         return ""
@@ -310,7 +362,7 @@ def _interrupt_block(sid: str) -> str:
     """Interrupt-lite: an `interrupt` directive cannot cancel the turn from a subprocess, but a
     pre_tool_call block can refuse the next tool call and hand the model a stop instruction.
     Returns the block message, or '' when no interrupt is pending."""
-    data = _call("GET", "/sessions/" + urllib.parse.quote(sid, safe="") + "/directives?status=pending")
+    data = _call("GET", "/sessions/" + _quote(sid) + "/directives?status=pending")
     if not isinstance(data, dict):
         return ""
     for d in data.get("directives") or []:
@@ -322,7 +374,7 @@ def _interrupt_block(sid: str) -> str:
         msg = str(d.get("message") or "").strip()
         if did:
             _call("POST", "/sessions/%s/directives/%s/ack" % (
-                urllib.parse.quote(sid, safe=""), urllib.parse.quote(str(did), safe="")),
+                _quote(sid), _quote(str(did))),
                 {"result": "applied"})
         _break_arm(sid)
         return (msg + "\n\n" + BREAK_MESSAGE) if msg else BREAK_MESSAGE
@@ -423,7 +475,7 @@ def main() -> None:
             text = str(ev.get("result_text") or "")
             sid = ev["session_id"]
             if ev.get("status") == "error" and _native_warn_due(sid) and _native_loop_warning(text):
-                r = _call("POST", "/sessions/%s/intervene" % urllib.parse.quote(sid, safe=""),
+                r = _call("POST", "/sessions/%s/intervene" % _quote(sid),
                           {"action": "redirect",
                            "message": "Hermes reported a repeated identical failure. " + STOPLOOP_PROTOCOL})
                 if isinstance(r, dict):
