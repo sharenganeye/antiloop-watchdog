@@ -73,6 +73,86 @@ An in-process variant of the six tool-loop hooks was implemented and passes its 
 through), but it cannot run where plugins are hosted out of process. It is therefore **not**
 shipped as the default path. The shell-hook bridge is what actually runs in CLI sessions.
 
+
+## Hardening the client (after review)
+
+The socket client is the one place where a misbehaving watchdog could hurt the agent, so it now
+enforces four rules internally:
+
+| rule | why |
+|---|---|
+| **one wall-clock deadline** (`TOTAL_S = 1.5`) covering connect + send + read + parse | a per-recv timeout lets a peer that dribbles one byte at a time hold the hook open indefinitely |
+| **response cap** (`MAX_RESPONSE = 1 MiB`) | the hook never buffers unbounded data from the service |
+| **truncated/garbled body → `{}`** | fail open; a half-written response must not raise inside the agent |
+| **atomic breaker writes** (`os.replace` via a temp file) | two sessions racing on the breaker file must never read a half-written marker |
+
+Verified against a hostile stub (`integration/test_hostile_peers.py`), one case per failure mode:
+
+```
+garbage            returned 0.00 s   no exception
+truncated body     returned 0.00 s   no exception
+chunked            returned 0.00 s   decoded correctly
+oversized (5 MB)   returned 0.01 s   no exception
+never-ending       returned 1.51 s   no exception   <- the deadline is what stops it
+closes at once     returned 0.00 s   no exception
+```
+
+The real service answers `GET /status` in 2.1 ms, and the bridge harness stays at 35/35.
+
+## Default event set
+
+The bridge used to run six events. Two of them ( `post_llm_call`, `post_api_request` ) mostly fed
+telemetry, not protection, and each cost a process spawn per turn. The default is now four:
+
+| event | job |
+|---|---|
+| `pre_tool_call` | surgical block of the repeated call |
+| `post_tool_call` | failure detection (the streak that arms the block) |
+| `pre_llm_call` | delivers the STOPLOOP redirect into the next turn |
+| `on_session_end` | closes the session cleanly |
+
+With `intervention.allow_interrupt: false` in `config/watchdog.config.json` the service no longer
+escalates to an interrupt request that this build cannot honour; the block plus the redirect is the
+only real enforcement, and the docs now say so.
+
+**One trade-off, stated plainly.** Dropping `post_llm_call` also removes the only text-loop signal
+available in CLI sessions: the in-process stream detector that catches repeated sentences loads in
+the gateway/plugin host, not in `hermes … chat -q`. Where the bridge runs without the plugin, a
+repeated-sentence loop in the final answer is therefore not reported to the watchlog any more. The
+tool-loop protection (detect, block, redirect) is untouched. If text-loop coverage in CLI matters
+more than ~55 ms per turn, re-add that one event — it is a one-line change.
+
+## Two confounders found while measuring
+
+**1. The desktop window costs model speed.** The Hermes desktop app renders continuously while
+llama.cpp wants the same GPU for its expert cache. Same prompt, same profile, alternating phases:
+
+| phase | turns | wall median | model generation (Strata log) |
+|---|---|---|---|
+| window visible | 4 | 19.47 s | **49.1 tok/s** (n=13) |
+| window minimised | 4 | 20.34 s | **55.5 tok/s** (n=12) |
+
+The model generates ~13 % faster with the UI out of the way. Wall time did not follow — it is
+dominated by prompt size and tool turns, and one visible turn ran to 31 s. Read the generation row,
+not the wall row: the app is competing with the model, and that is not Antiloop's doing.
+
+**2. Claude's 10-pair protocol, applied.** Identical prompt, hooks on/off alternating, a dedicated
+profile so no session lease interfered:
+
+```
+hooks     23.0 22.3 24.9 21.9 22.7 20.3 20.8 21.6 18.5 22.7
+no hooks  20.7 20.3 20.7 21.9 22.3 23.9 21.7 20.3 19.2 22.7
+paired difference: mean +0.49 s, 95% CI [-0.76, +1.75]
+```
+
+Verdict: **no detectable difference** at this sample size — which is the honest form of the claim.
+With four events at 55–60 ms the expected cost is ~0.25 s per turn, and the interval is consistent
+with that; it is simply smaller than the ±1.3 s turn-to-turn spread.
+
+A first attempt at this A/B produced 2.4 s "turns" for both arms: every run was rejected by Hermes'
+session lease (`active session limit 1/1`, held by the desktop session). Those numbers were
+discarded, and the measurement moved to a dedicated profile.
+
 ## What did not change: the model
 
 Strata's own request log for the same period holds 22 999 generation samples across 72 server runs:

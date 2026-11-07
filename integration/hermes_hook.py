@@ -34,7 +34,9 @@ from pathlib import Path
 BASE_URL = os.environ.get("WATCHDOG_URL", "http://127.0.0.1:8791")
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN_FILE = Path(os.environ.get("WATCHDOG_TOKEN_FILE", ROOT / "state" / "token"))
-TIMEOUT_S = 0.8          # hard ceiling for every call
+TIMEOUT_S = 0.8          # per-recv ceiling
+TOTAL_S = 1.5            # one wall-clock deadline for connect + read + parse
+MAX_RESPONSE = 1_048_576  # never buffer more than this from the watchdog
 BREAKER_S = 45           # after a transport failure, stay silent this long (circuit breaker)
 MAX_TEXT = 60_000        # watchdog accepts <=64k chars per text_delta
 MAX_RESULT = 16_000
@@ -140,12 +142,19 @@ def _breaker_open() -> bool:
     return age < BREAKER_S
 
 
-def _breaker_trip() -> None:
+def _atomic_write(path: Path, text: str) -> None:
+    """Two sessions race on the breaker file; a half-written marker must never be read."""
     try:
-        BREAKER_FILE.parent.mkdir(parents=True, exist_ok=True)
-        BREAKER_FILE.write_text(str(int(time.time())), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp%d" % os.getpid())
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
     except OSError:
         pass
+
+
+def _breaker_trip() -> None:
+    _atomic_write(BREAKER_FILE, str(int(time.time())))
 
 
 def _breaker_reset() -> None:
@@ -187,30 +196,55 @@ def _endpoint():
 
 
 def _call(method: str, path: str, body=None):
-    """Raw HTTP/1.1 over a socket: ~2 ms instead of ~55 ms of import cost per event."""
+    """Raw HTTP/1.1 over a socket, under ONE wall-clock deadline for the whole exchange.
+
+    Hard rules (they keep the agent safe when the watchdog misbehaves):
+    - the deadline covers connect + send + read + parse, not each syscall;
+    - the response is capped at MAX_RESPONSE bytes;
+    - a truncated or garbled body returns {} instead of raising;
+    - a 4xx/5xx means "service up, refused" - not a transport failure;
+    - the bearer token is never logged and never written anywhere.
+    """
     token = _token()
     if not token or _breaker_open():
         return None
+    deadline = time.monotonic() + TOTAL_S
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        return left if left > 0 else 0.0
+
     data = b"" if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
     host, port = _endpoint()
     head = (method + " " + path + " HTTP/1.1\r\nHost: " + host + ":" + str(port) +
-            "\r\nAuthorization: Bearer " + token + "\r\nConnection: close\r\n")
+            "\r\nAuthorization: Bearer " + token +
+            "\r\nConnection: close\r\n")
     if body is not None:
         head += "Content-Type: application/json\r\n"
     head += "Content-Length: " + str(len(data)) + "\r\n\r\n"
+
     try:
-        sock = socket.create_connection((host, port), timeout=TIMEOUT_S)
+        sock = socket.create_connection((host, port), timeout=max(0.05, remaining()))
     except OSError:
         _breaker_trip()
         return None
     try:
+        sock.settimeout(max(0.05, remaining()))
         sock.sendall(head.encode("latin-1") + data)
-        chunks = []
-        while True:
-            part = sock.recv(65536)
+        chunks, size = [], 0
+        while size < MAX_RESPONSE:
+            left = remaining()
+            if left <= 0:
+                break
+            sock.settimeout(left)
+            try:
+                part = sock.recv(65536)
+            except socket.timeout:
+                break
             if not part:
                 break
             chunks.append(part)
+            size += len(part)
         raw = b"".join(chunks)
     except OSError:
         _breaker_trip()
@@ -220,6 +254,7 @@ def _call(method: str, path: str, body=None):
             sock.close()
         except OSError:
             pass
+
     if not raw:
         _breaker_trip()
         return None
@@ -228,19 +263,19 @@ def _call(method: str, path: str, body=None):
     parts = status_line.split(b" ")
     code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     if code >= 400:
-        return None                       # service is up, it refused this: not a transport failure
+        return None
     if b"chunked" in head_bytes.lower():
         out, rest = [], payload
         while True:
             size_line, _, rest = rest.partition(b"\r\n")
             try:
-                size = int(size_line.split(b";")[0], 16)
+                chunk = int(size_line.split(b";")[0], 16)
             except ValueError:
                 break
-            if size == 0:
+            if chunk == 0:
                 break
-            out.append(rest[:size])
-            rest = rest[size + 2:]
+            out.append(rest[:chunk])
+            rest = rest[chunk + 2:]
         payload = b"".join(out)
     try:
         _breaker_reset()
