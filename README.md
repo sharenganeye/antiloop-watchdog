@@ -109,6 +109,7 @@ Python 3.9+ (developed on 3.12/3.14). Optional: `psutil` for the resource-measur
 | [CONFIGURATION.md](CONFIGURATION.md) | every configuration key |
 | [TEST_REPORT.md](TEST_REPORT.md) | test coverage and measured overhead |
 | [integration/HERMES_INTEGRATION.md](integration/HERMES_INTEGRATION.md) | what was verified on real Hermes, and what is not possible |
+| [Press kit](https://sharenganeye.github.io/antiloop-watchdog/press.html) | one-page brief for a video, article or technical review |
 
 ## Support
 
