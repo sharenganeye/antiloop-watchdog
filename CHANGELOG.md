@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.1.0 - 2026-11-08
+
+P1 hardening round: eight findings from external review plus four defects found while reviewing the
+patch itself. Backwards compatible with 1.0.x; no configuration change is required.
+
+### Hook and client (integration/hermes_hook.py)
+- An incomplete HTTP reply is no longer treated as success. Completion is now proven, not assumed:
+  a Content-Length body must arrive in full, a chunked body must carry every chunk delimiter, a
+  valid trailer and the zero-chunk terminator, and a close-delimited body needs an observed close.
+  Reaching the response cap counts as truncation, never as completion.
+- Trailer field names are validated against the RFC 7230 token character set; an empty name, a
+  space, a control byte or a non-ASCII byte is rejected.
+- An oversize stdin payload is dropped unparsed and counted instead of being truncated into
+  invalid JSON (4 MiB ceiling).
+- A 503 counts as unavailability and opens the breaker; an ordinary 4xx still does not.
+- All three blocking paths require automatic mode, so warn stays advisory.
+
+### Watchdog server (antiloop_watchdog/api.py)
+- Listen backlog raised from 5 to 128.
+- Bounded worker pool (64) with a 250 ms wait before refusing.
+- Slot ownership is tracked and released exactly once under a lock; a refused connection can no
+  longer release another worker's slot.
+- The handler timeout is actually applied to the connection (it was dead configuration).
+- The overload refusal drains a bounded amount of the request first, so clients receive the 503
+  instead of a connection reset.
+
+### Client and detector
+- Typed errors: WatchdogError base with WatchdogUnavailable and WatchdogHTTPError; empty, malformed
+  and undecodable replies all raise instead of returning None or leaking JSONDecodeError.
+- Repetition detection matches case-insensitively, so a capitalised loop is truncated instead of
+  being detected and ignored.
+- An unclosed code fence no longer latches across turns; repetition history is preserved so loops
+  spanning a turn boundary are still caught.
+
+### Tests
+- 49 new regression tests (tests/test_p1_regressions.py and test_p1_followup*.py). The eight
+  regression tests were written before the patch and all failed against 1.0.1.
+- Full suite: 147 passed, 1 skipped (the POSIX-only SIGTERM test).
+
+### Notes
+- Version 1.0.0 and 1.0.1 remain available as tags and releases.
+- This release is not yet installed on any machine; installing it is a separate step.
+
 ## 1.0.1 — 2026-11-07
 
 Performance and hardening pass, driven by a measured slowdown report.

@@ -133,6 +133,12 @@ class RepetitionDetector:
             sd = self._check_sentences(part, cfg)
             if sd:
                 out.append(sd)
+        if final:
+            # a turn ended: only the fence state may leak across turns (a truncated answer leaves it
+            # open). Repetition history is deliberately kept - a loop that spans the turn boundary
+            # must still be detectable (P1/C2, reviewed).
+            self.in_fence = False
+            self.bt_run = 0
         return out
 
     # ------------------------------------------------------------------ n-gram

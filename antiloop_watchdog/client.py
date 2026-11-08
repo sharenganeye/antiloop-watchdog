@@ -18,11 +18,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-class WatchdogUnavailable(Exception):
-    """The watchdog could not be reached (callers should carry on without it)."""
+class WatchdogError(Exception):
+    """Base class for every typed watchdog failure."""
 
 
-class WatchdogHTTPError(Exception):
+class WatchdogUnavailable(WatchdogError):
+    """The watchdog could not be reached, or answered with something unusable."""
+
+
+class WatchdogHTTPError(WatchdogError):
     def __init__(self, status: int, code: str, message: str):
         super().__init__(f"{status} {code}: {message}")
         self.status, self.code, self.message = status, code, message
@@ -49,8 +53,16 @@ class WatchdogClient:
         req = urllib.request.Request(self.base_url + path, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else None
+                try:
+                    raw = resp.read().decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise WatchdogUnavailable("watchdog returned undecodable bytes: %s" % exc) from None
+                if not raw.strip():
+                    raise WatchdogUnavailable("watchdog returned an empty 200 response")
+                try:
+                    return json.loads(raw)
+                except ValueError as exc:
+                    raise WatchdogUnavailable("watchdog returned a malformed body: %s" % exc) from None
         except urllib.error.HTTPError as exc:
             try:
                 err = json.loads(exc.read().decode("utf-8")).get("error", {})

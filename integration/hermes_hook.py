@@ -38,6 +38,7 @@ TIMEOUT_S = 0.8          # per-recv ceiling
 TOTAL_S = 1.5            # one wall-clock deadline for connect + read + parse
 MAX_RESPONSE = 1_048_576  # never buffer more than this from the watchdog
 BREAKER_S = 45           # after a transport failure, stay silent this long (circuit breaker)
+STDIN_LIMIT = 4_194_304  # hard ceiling on one hook payload; oversize is recorded, never truncated
 MAX_TEXT = 60_000        # watchdog accepts <=64k chars per text_delta
 MAX_RESULT = 16_000
 BREAKER_FILE = ROOT / "integration" / ".watchdog_down"
@@ -231,7 +232,7 @@ def _call(method: str, path: str, body=None):
     try:
         sock.settimeout(max(0.05, remaining()))
         sock.sendall(head.encode("latin-1") + data)
-        chunks, size = [], 0
+        chunks, size, closed = [], 0, False
         while size < MAX_RESPONSE:
             left = remaining()
             if left <= 0:
@@ -242,6 +243,7 @@ def _call(method: str, path: str, body=None):
             except socket.timeout:
                 break
             if not part:
+                closed = True
                 break
             chunks.append(part)
             size += len(part)
@@ -258,30 +260,80 @@ def _call(method: str, path: str, body=None):
     if not raw:
         _breaker_trip()
         return None
+    capped = size >= MAX_RESPONSE          # the cap is a truncation, never a completion
     head_bytes, _, payload = raw.partition(b"\r\n\r\n")
+    declared = None
+    for line in head_bytes.split(b"\r\n")[1:]:
+        if line.lower().startswith(b"content-length:"):
+            try:
+                declared = int(line.split(b":", 1)[1].strip())
+            except ValueError:
+                declared = None
+            break
     status_line = head_bytes.split(b"\r\n", 1)[0]
     parts = status_line.split(b" ")
     code = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-    if code >= 400:
+    if code == 503:
+        _breaker_trip()                # overloaded, not refusing: treat as unavailable (B2)
         return None
+    if code >= 400:
+        return None                    # ordinary refusal: service is up, this call is not served
+
     if b"chunked" in head_bytes.lower():
-        out, rest = [], payload
+        out, rest, complete = [], payload, False
+        # RFC 7230 token characters, for trailer field names
+        TOKEN = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-.^_|~`"
         while True:
             size_line, _, rest = rest.partition(b"\r\n")
+            if not size_line:
+                break                  # stream ended before the terminator
             try:
-                chunk = int(size_line.split(b";")[0], 16)
+                chunk = int(size_line.split(b";")[0].strip(), 16)
             except ValueError:
-                break
+                break                  # malformed framing
             if chunk == 0:
+                # the trailer must be either empty ("\r\n") or valid token:value fields
+                # each ending CRLF, then a final CRLF. Nothing may follow the terminator.
+                if rest == b"\r\n":
+                    complete = True
+                elif rest.endswith(b"\r\n\r\n"):
+                    fields = rest[:-2].split(b"\r\n")
+                    if fields and fields[-1] == b"":
+                        fields = fields[:-1]
+                    complete = bool(fields)
+                    for line in fields:
+                        name, sep, _value = line.partition(b":")
+                        if (not sep or not name or any(ch not in TOKEN for ch in name)):
+                            complete = False
+                            break
                 break
+            if len(rest) < chunk + 2 or rest[chunk:chunk + 2] != b"\r\n":
+                break                  # truncated mid-chunk, or a missing CRLF delimiter
             out.append(rest[:chunk])
             rest = rest[chunk + 2:]
+        if not complete:
+            _breaker_trip()            # a partial or malformed chunked body is never a reply
+            return None
         payload = b"".join(out)
+    elif declared is not None:
+        if capped or len(payload) < declared:
+            _breaker_trip()            # the declared body did not fully arrive
+            return None
+    else:
+        if capped or not closed:
+            _breaker_trip()            # close-delimited responses need an observed close
+            return None
+
+    if not payload:
+        _breaker_trip()
+        return None
     try:
-        _breaker_reset()
-        return json.loads(payload.decode("utf-8")) if payload else {}
+        body = json.loads(payload.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        return {}
+        _breaker_trip()                # garbled body is a failure, not an empty success
+        return None
+    _breaker_reset()
+    return body
 
 
 def _as_text(value, limit: int) -> str:
@@ -393,10 +445,12 @@ def _directive_context(sid: str) -> str:
     return "[ANTILOOP] Repetition detected in this session.\n" + "\n".join(messages) + "\n\n" + STOPLOOP_PROTOCOL
 
 
-def _interrupt_block(sid: str) -> str:
+def _interrupt_block(sid: str, mode: str = "") -> str:
     """Interrupt-lite: an `interrupt` directive cannot cancel the turn from a subprocess, but a
     pre_tool_call block can refuse the next tool call and hand the model a stop instruction.
     Returns the block message, or '' when no interrupt is pending."""
+    if str(mode or "").lower() != "automatic":
+        return ""                          # D1: warn is advisory - no blocking path may run in it
     data = _call("GET", "/sessions/" + _quote(sid) + "/directives?status=pending")
     if not isinstance(data, dict):
         return ""
@@ -426,8 +480,8 @@ def _block_from_detection(resp, sid: str, tool: str, args) -> str:
     """
     if not isinstance(resp, dict):
         return ""
-    if str(resp.get("mode") or "").lower() not in ("warn", "automatic"):
-        return ""
+    if str(resp.get("mode") or "").lower() != "automatic":
+        return ""                          # warn is advisory: it may report, never refuse
     best = None
     for d in resp.get("detections") or []:
         try:
@@ -453,9 +507,29 @@ def _native_loop_warning(text: str) -> bool:
             or "this is the 3rd consecutive identical call" in head)
 
 
+def _record_failure(kind: str) -> None:
+    """Count a dropped event so silent degradation becomes visible (never raises)."""
+    try:
+        path = Path(os.environ.get("ANTILOOP_FAILURE_LOG")
+                    or (ROOT / "integration" / "state" / "hook_failures.json"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data[kind] = int(data.get(kind, 0)) + 1
+        _atomic_write(path, json.dumps(data, ensure_ascii=False))
+    except Exception:
+        pass
+
+
 def main() -> None:
     try:
-        raw = sys.stdin.read(262_144)
+        raw = sys.stdin.read(STDIN_LIMIT + 1)
+        if len(raw) > STDIN_LIMIT:
+            _record_failure("oversize_payload")
+            return
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             return
@@ -497,7 +571,7 @@ def main() -> None:
                 return
             # Zero extra HTTP cost: only look for directives when the ingest reply says some exist.
             if isinstance(resp, dict) and (resp.get("pending_directives") or 0) > 0:
-                block = _interrupt_block(sid)
+                block = _interrupt_block(sid, str(resp.get("mode") or ""))
                 if block:
                     _break_complete(sid, tool, args)
                     sys.stdout.write(json.dumps({"action": "block", "message": block},

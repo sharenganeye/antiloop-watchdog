@@ -10,6 +10,8 @@ from __future__ import annotations
 import hmac
 import json
 import re
+import socket
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
@@ -264,12 +266,89 @@ class Handler(BaseHTTPRequestHandler):
 class ApiServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 128      # the default of 5 turns a hook burst into resets
+    handler_timeout = 10.0        # a stalled client must not pin a worker forever
+    max_workers = 64              # bounded concurrency; excess connections get 503, not a thread
+    drain_limit = 262144          # bytes of a refused request we are willing to read
 
     def __init__(self, service, host: str, port: int):
         self.service = service
+        self._slots = threading.BoundedSemaphore(self.max_workers)
+        self._owned = set()
+        self._lock = threading.Lock()
+        self._double_release = 0      # observable invariant, asserted by the tests
         super().__init__((host, port), Handler)
         real = self.server_address[1]
         self.allowed_hosts = {f"127.0.0.1:{real}", f"localhost:{real}", f"[::1]:{real}"}
+
+    slot_wait = 0.25              # bounded wait for a worker slot before refusing
+
+    def _release_slot(self, request) -> None:
+        """Release a connection's slot exactly once, atomically.
+
+        The ownership check, the removal and the release must be one critical section:
+        the exception-cleanup path and shutdown_request can run concurrently for the same
+        connection, and an unsynchronised check-then-release lets both of them release.
+        """
+        with self._lock:
+            if id(request) in self._owned:
+                self._owned.discard(id(request))
+                try:
+                    self._slots.release()
+                except ValueError:            # BoundedSemaphore says this was a double release
+                    self._double_release += 1  # counted, so the tests can assert it stays 0
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(timeout=self.slot_wait):
+            # Refuse WITHOUT touching the semaphore: this connection never owned a slot, and
+            # releasing one here would hand an active worker's capacity to the next caller.
+            try:
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n"
+                                b"Connection: close\r\n\r\n")
+            except Exception:
+                pass                          # the peer is gone; nothing to tell it
+            try:
+                request.shutdown(socket.SHUT_WR)   # FIN, so the client knows the response ended
+            except Exception:
+                pass
+            # Drain the request so close() does not answer a half-read request with an RST.
+            # Bounded twice: by time (slot_wait) and by bytes, so a flooder cannot pin the loop.
+            budget_end = time.monotonic() + self.slot_wait
+            drained = 0
+            while drained < self.drain_limit:
+                left = budget_end - time.monotonic()
+                if left <= 0:
+                    break
+                try:
+                    request.settimeout(left)
+                    part = request.recv(65536)
+                except (socket.timeout, OSError):
+                    break
+                if not part:
+                    break
+                drained += len(part)
+            try:
+                request.close()
+            except Exception:
+                pass
+            return
+        with self._lock:
+            self._owned.add(id(request))
+        try:
+            request.settimeout(self.handler_timeout)   # a stalled client must not pin a worker
+        except OSError:
+            pass
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release_slot(request)
+            raise
+
+    def shutdown_request(self, request):
+        try:
+            super().shutdown_request(request)
+        finally:
+            self._release_slot(request)
 
     def start(self) -> threading.Thread:
         t = threading.Thread(target=self.serve_forever, kwargs={"poll_interval": 0.5},

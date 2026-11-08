@@ -81,6 +81,9 @@ def _find_spans(text: str, unit: str, limit: int = 24):
     pat = _unit_regex(unit)
     if pat is None:
         return []
+    # the unit is normalised to lower case for counting, so the search must be case-insensitive
+    # or a capitalised loop is detected and then never truncated (P1/C1)
+    pat = re.compile(pat.pattern, pat.flags | re.IGNORECASE)
     return [(m.start(), m.end()) for m in pat.finditer(text)][:limit]
 
 def _structured(text: str, unit: str, positions=None) -> bool:
@@ -204,7 +207,7 @@ def _recall(session_id: str, response_text: str):
         items = [d for d in _detections.get(session_id, []) if now - d["ts"] < DETECTION_TTL_S]
         _detections[session_id] = items
     for d in reversed(items):
-        if d["unit"] and d["unit"][:120] in response_text:
+        if d["unit"] and d["unit"][:120].casefold() in response_text.casefold():
             return d
     return None
 
