@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.1.0 - 2026-11-08
+## 1.1.0-beta.1 - 2026-11-08  (PRE-RELEASE)
+
+Beta: the patch is fully tested but has NOT been installed and exercised end to end on a live
+Hermes profile. The stable 1.1.0 version number is reserved for the release that passes the
+installation and performance gate.
 
 P1 hardening round: eight findings from external review plus four defects found while reviewing the
 patch itself. Backwards compatible with 1.0.x; no configuration change is required.
