@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.2.0 - 2026-11-08
+
+Stable: both protection layers were installed and exercised live on the target Hermes installation,
+not only in the harness.
+
+### Layer A - model output (integration/hermes_plugin/antiloop_stream)
+- Final-buffer flush: `on_stream_end` analyses the residual buffer before releasing the turn. The
+  cadence check only ran every 120 characters, so a 285-character three-sentence reply was never
+  examined and escaped detection.
+- Duplicate protection: the fire flag is claimed under the lock, so a concurrent delta and end cannot
+  both write a record.
+- Thresholds and structured-text veto unchanged (3 sentences / 4 phrases / 8 words).
+
+### Layer B - agent actions (integration/hermes_hook.py)
+- Detections now arm the surgical break in every mode. The watchdog deduplicates detections with a
+  cooldown, so a detection seen in `warn` previously left nothing armed for a later switch to
+  `automatic`.
+- Refusal requires the cached session mode to be `automatic`; `observe` and `warn` record and arm but
+  never refuse.
+- Session mode is cached from ingest replies (`md-<hash>`, 600 s TTL) so `pre_tool_call` never spends
+  an extra HTTP round trip learning it.
+- Live proof: three identical failing `terminal` calls -> `tool_repeat_failed` at confidence 0.88, then
+  the identical fourth call was refused with `{"action":"block"}` and never executed, while a different
+  command in the same session ran normally.
+
+### Provisioning and operations
+- `integration/provision_profiles.py`: idempotent per-profile provisioning of plugin, hooks and
+  allowlist approvals, with `--check` reporting. Verified on all twelve profiles and on a newly created
+  profile.
+- `integration/start_watchdogs.ps1`: idempotent watchdog launcher (probes `/health`, never spawns a
+  duplicate), suitable for the user's Startup folder so the watchdogs survive a reboot.
+- `docs/PROTECTION.md`: architecture, the seven findings that shaped it, live-vs-harness evidence,
+  deployment and rollback.
+
+### Tests
+- `tests/test_stream_finalize.py`: 13 checks for the final-buffer repair (runs standalone and under
+  pytest).
+- Hook harness grown to 37 checks: warn must not block, warn must arm, automatic must block, and the
+  block must carry the recovery protocol.
+- Hostile-peer tests isolated per case (the truncated-body stub legitimately trips the circuit breaker,
+  which previously short-circuited every later case).
+
 ## 1.1.0-beta.1 - 2026-11-08  (PRE-RELEASE)
 
 Beta: the patch is fully tested but has NOT been installed and exercised end to end on a live

@@ -86,7 +86,11 @@ def _canon(value) -> str:
 
 
 def _break_blocks(sid: str, tool: str, args) -> bool:
-    """Surgical block: refuse the repeated call, allow a different one (a real change of approach)."""
+    """Surgical block: refuse the repeated call, allow a different one (a real change of approach).
+
+    Observe and warn never refuse: only an `automatic` session acts on an armed break."""
+    if _mode_cached(sid) != "automatic":
+        return False
     rec = _break_record(sid)
     if rec is None:
         return False
@@ -113,6 +117,33 @@ def _break_complete(sid: str, tool: str, args) -> None:
     rec = _break_record(sid)
     if rec is not None and not rec.get("tool"):
         _break_arm(sid, tool, args)
+
+
+def _mode_path(sid: str) -> Path:
+    return BREAK_DIR / ("md-" + hashlib.sha1(sid.encode("utf-8", "replace")).hexdigest()[:20])
+
+
+def _mode_stamp(sid: str, mode: str) -> None:
+    """Cache the session mode seen in an ingest reply: pre_tool_call must not spend an extra
+    HTTP round-trip asking for it, and observe must never block."""
+    if not sid or not mode:
+        return
+    try:
+        BREAK_DIR.mkdir(parents=True, exist_ok=True)
+        _mode_path(sid).write_text(json.dumps({"ts": time.time(), "mode": str(mode).lower()}),
+                                   encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _mode_cached(sid: str, ttl: float = 600.0) -> str:
+    try:
+        d = json.loads(_mode_path(sid).read_text(encoding="utf-8"))
+        if time.time() - float(d.get("ts") or 0) <= ttl:
+            return str(d.get("mode") or "")
+    except (OSError, ValueError, TypeError):
+        pass
+    return ""
 
 
 def _native_warn_path(sid: str) -> Path:
@@ -480,8 +511,7 @@ def _block_from_detection(resp, sid: str, tool: str, args) -> str:
     """
     if not isinstance(resp, dict):
         return ""
-    if str(resp.get("mode") or "").lower() != "automatic":
-        return ""                          # warn is advisory: it may report, never refuse
+    mode = str(resp.get("mode") or "").lower()
     best = None
     for d in resp.get("detections") or []:
         try:
@@ -494,7 +524,13 @@ def _block_from_detection(resp, sid: str, tool: str, args) -> str:
         return ""
     msg = ("[ANTILOOP] This exact action has already repeated (%s, confidence %.2f). "
            "The call was NOT executed.\n\n" % best) + STOPLOOP_PROTOCOL
+    # Arm in every mode: the watchdog deduplicates detections with a cooldown, so a detection that
+    # arrives while the session is still advisory must leave a durable break behind. Otherwise
+    # switching the session to automatic afterwards refuses nothing - there is no fresh detection
+    # for the next identical call to act on.
     _break_arm(sid, tool, args, msg)
+    if mode != "automatic":
+        return ""                       # observe/warn report and arm, but never refuse
     return msg
 
 
@@ -562,6 +598,8 @@ def main() -> None:
                                             ensure_ascii=False))
                 return
             resp = _call("POST", "/events", ev)
+            if isinstance(resp, dict):
+                _mode_stamp(sid, resp.get("mode"))
             # A strong detection in warn/automatic refuses THIS already-repeated call and hands
             # the model the recovery protocol (pre_llm_call cannot reach a loop inside one turn).
             block = _block_from_detection(resp, sid, tool, args)
@@ -591,6 +629,8 @@ def main() -> None:
                     _native_warn_stamp(sid)
 
             resp = _call("POST", "/events", ev)
+            if isinstance(resp, dict):
+                _mode_stamp(sid, resp.get("mode"))
             # The failed-repeat detection is computed from the RESULT, so it arrives on this
             # reply, not on the tool_call one: arm the surgical break for the next identical call.
             if ev.get("status") == "error":

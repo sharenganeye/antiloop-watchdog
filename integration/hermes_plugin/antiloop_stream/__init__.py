@@ -293,10 +293,43 @@ def on_stream_delta(**kwargs):
 
 
 def on_stream_end(**kwargs):
-    """Release only the stream buffer. The detection record deliberately survives for the
-    transform hook (owner requirement: do not drop it at stream end)."""
+    """Flush the unanalysed tail, then release the stream buffer.
+
+    on_stream_delta only analyses when CHECK_EVERY_CHARS (120) of new text has accumulated, so a
+    short reply that repeats itself can end inside the last sub-window and never be examined
+    (a three-sentence repetition is 285 chars: checks land at 120 and 240, both times before the
+    third sentence is complete). Analyse that residual once here, under the same de-duplication
+    flag, and then release the turn exactly as before.
+
+    The detection record deliberately survives for the transform hook (owner requirement: do not
+    drop it at stream end).
+    """
     try:
         key = (str(kwargs.get("session_id") or ""), str(kwargs.get("turn_id") or ""))
+        with _lock:
+            st = _turns.get(key)
+            if st is None:
+                return
+            buf = st.get("buf") or ""
+            checked = int(st.get("checked") or 0)
+            fired = bool(st.get("fired"))
+        if not fired and buf and len(buf) > checked:
+            det = analyse(buf)
+            if det:
+                claimed = False
+                with _lock:
+                    st = _turns.get(key)
+                    if st is not None and not st.get("fired"):
+                        st["fired"] = True
+                        claimed = True
+                if claimed:
+                    record = {"ts": time.time(), "session_id": key[0], "turn_id": key[1],
+                              **det, "chars": len(buf)}
+                    _remember(key[0], {"ts": record["ts"], "unit": det["unit"],
+                                       "kind": det["kind"], "repeats": det["repeats"],
+                                       "turn_id": key[1]})
+                    _log(record)
+                    _forward(key[0], buf[-4000:], det["kind"])
         with _lock:
             _turns.pop(key, None)
     except Exception:
